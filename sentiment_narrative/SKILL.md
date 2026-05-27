@@ -1,6 +1,6 @@
 ---
 Skill Name: sentiment-movers-analysis
-Description; This skill identifies statistically anomalous sentiment shifts across sector × event category combinations in financial earnings calls, provides equity analyst-style interpretation backed by external research, generates time-series visualizations of sentiment trends, and extracts specific earnings call excerpts as evidence. It leverages two Snowflake table-valued functions (GET_SENTIMENT_MOVERS, GET_AVG_NET_POSITIVITY) and Pronto MCP search tools.
+Description: This skill identifies statistically anomalous sentiment shifts across sector × event category combinations in financial earnings calls, provides equity analyst-style interpretation backed by external research, generates time-series visualizations of sentiment trends, and extracts specific earnings call excerpts as evidence. It leverages two Snowflake table-valued functions (GET_SENTIMENT_MOVERS, GET_AVG_NET_POSITIVITY) and Pronto MCP search tools.
 ---
 
 ## When to Use
