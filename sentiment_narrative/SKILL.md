@@ -1,207 +1,313 @@
 ---
-name: Sentiment Anomaly & Narrative Analysis Skill
-Description: This skill identifies statistically unusual sentiment shifts from earnings call transcripts across Russell 3000 and S&P 500 sectors, then builds equity-analyst-style narratives explaining what's driving those shifts. It combines Z-score anomaly detection with time-series trend visualization and external research to produce actionable investment insights.
+## Skill Name: sentiment-movers-analysis
+## Description; This skill identifies statistically anomalous sentiment shifts across sector × event category combinations in financial earnings calls, provides equity analyst-style interpretation backed by external research, generates time-series visualizations of sentiment trends, and extracts specific earnings call excerpts as evidence. It leverages two Snowflake table-valued functions (GET_SENTIMENT_MOVERS, GET_AVG_NET_POSITIVITY) and Pronto MCP search tools.
 ---
 
-## Available Tools
+## When to Use
+- User asks about **unusual sentiment shifts**, **sentiment movers**, or **anomalies** in earnings call data
+- User wants to understand **why** a sector's sentiment on a specific theme changed significantly
+- User requests a combined quantitative + qualitative analysis of sector-level sentiment patterns
+- User asks for **nowcasting signals** or **earnings sentiment monitoring**
 
-### 1. GET_SENTIMENT_MOVERS (Anomaly Detection)
-**Purpose:** Identifies sector × event category combinations with statistically significant sentiment deviations from historical norms.
-
-**Parameters:**
-| Parameter | Type | Description | Example Values |
-|-----------|------|-------------|----------------|
-| `p_indexname` | VARCHAR | Financial index to analyze | `Russell 3000 Index`, `S&P 500 Index` |
-| `p_documentsectionname` | VARCHAR | Section of earnings call document | `Total`, `Presentation`, `Question`, `Answer` |
-| `p_importance` | VARCHAR | Importance level filter | `high`, `medium`, `low` |
-
-**Returns:** A table ranked by MAX_ABS_ZSCORE (descending) with columns:
-- `SECTOR` — Broad market sector
-- `EVENTCATEGORYNAME` — Thematic category (e.g., Forecast_FinancialPerformance)
-- `LATEST_QUARTER` — Most recent quarter in data
-- `LATEST_QTR_AVG_SCORE` — Average net positivity for the latest quarter
-- `TRAILING_4QTR_AVG_SCORE` — Rolling 4-quarter average
-- `HISTORICAL_AVG_SCORE` — Long-run baseline mean
-- `HISTORICAL_STDDEV` — Long-run standard deviation
-- `LATEST_QTR_CHANGE` — Absolute change from historical mean
-- `TRAILING_4QTR_CHANGE` — Trailing 4Q change from historical mean
-- `LATEST_QTR_ZSCORE` — Z-score for latest quarter
-- `TRAILING_4QTR_ZSCORE` — Z-score for trailing 4 quarters
-- `MAX_ABS_ZSCORE` — Maximum of the two absolute Z-scores (used for ranking)
-
-**Interpretation:**
-- |Z-score| > 3.0 → Highly anomalous, warrants deep investigation
-- |Z-score| > 2.0 → Notable deviation, monitor closely
-- Positive Z → Sentiment is unusually bullish vs. history
-- Negative Z → Sentiment is unusually bearish vs. history
-
----
-
-### 2. GET_AVG_NET_POSITIVITY (Time Series)
-**Purpose:** Retrieves quarterly time-series of average net positivity scores for a specific sector × event category × index combination.
-
-**Parameters:**
-| Parameter | Type | Description | Example Values |
-|-----------|------|-------------|----------------|
-| `p_indexname` | VARCHAR | Financial index | `Russell 3000 Index`, `S&P 500 Index` |
-| `p_sector` | VARCHAR | Market sector | `Industrials`, `Financials`, `Information Technology`, `Communication Services`, `Consumer Discretionary`, `Health Care`, `Utilities`, `Materials`, `Energy`, `Real Estate`, `Consumer Staples` |
-| `p_eventcategoryname` | VARCHAR | Event category label | See Event Categories section below |
-| `p_documentsectionname` | VARCHAR | Document section | `Total`, `Presentation`, `Question`, `Answer` |
-| `p_importance` | VARCHAR | Importance level | `high`, `medium`, `low` |
-
-**Returns:** A table with columns:
-- `CALENDARYEARQUARTER` — e.g., "2024-3"
-- `AVG_NET_POSITIVITY_SCORE` — Score from -1 to 1
-
----
-
-## Event Category Reference
-
-Common `EVENTCATEGORYNAME` values:
-- `CurrentState_FinancialPerformance`
-- `Forecast_FinancialPerformance`
-- `Surprise_FinancialPerformance`
-- `CurrentState_OperationalPerformance`
-- `Forecast_OperationalPerformance`
-- `CurrentState_MarketAndCompetitivePosition`
-- `Forecast_MarketAndCompetitivePosition`
-- `StrategicPosition_RegulatoryAndLegalIssues`
-- `Forecast_RegulatoryAndLegalIssues`
-- `CurrentState_RegulatoryAndLegalIssues`
-- `StrategicPosition_MacroeconomicFactors`
-- `Forecast_MacroeconomicFactors`
-- `CurrentState_ESG`
-- `Forecast_ESG`
-- `Surprise_ESG`
-- `StrategicPosition_StrategicInitiatives`
-- `Surprise_StrategicInitiatives`
-- `CurrentState_StrategicInitiatives`
-- `StrategicPosition_OperationalPerformance`
-- `StrategicPosition_FinancialPerformance`
-- `StrategicPosition_ESG`
-- `Forecast_CapitalAllocation`
-- `CurrentState_CapitalAllocation`
-- `StrategicPosition_CapitalAllocation`
-- `Surprise_MacroeconomicFactors`
-- `Surprise_RegulatoryAndLegalIssues`
-- `Surprise_MarketAndCompetitivePosition`
-- `Surprise_OperationalPerformance`
-- `CurrentState_MacroeconomicFactors`
+## Prerequisites
+- Access to `QRSLLM_POC_DB.NOWCASTING_SANDBOX` schema
+- SELECT privileges on `PRONTO_OVERALL_ATCLEVELNETPOSITIVITY_INFO`
+- USAGE rights on `GET_SENTIMENT_MOVERS` and `GET_AVG_NET_POSITIVITY` functions
+- Access to Pronto MCP search tools for earnings call excerpts
 
 ---
 
 ## Workflow Steps
 
-### Step 1: Identify Anomalies
-Call `GET_SENTIMENT_MOVERS` with your desired index, document section, and importance level.
+### Step 1: Identify Anomalous Sentiment Movers
 
-**Default starting point (recommended):**
+**Tool:** `GET_SENTIMENT_MOVERS`
 
-p_indexname = 'Russell 3000 Index'
-p_documentsectionname = 'Total'
-p_importance = 'high'
+**Purpose:** Surface sector × event category combinations with statistically significant Z-score deviations from their historical norms.
 
-**Filter results to focus on:**
-- Top movers with |MAX_ABS_ZSCORE| > 2.5 (strong signals)
-- Separate UPTICK (positive Z) from DOWNTICK (negative Z)
-- Focus on 5-8 most interesting sector/theme pairs that tell a coherent macro story
+**Parameters:**
 
-### Step 2: Categorize the Signals
-Group the top movers into narrative buckets:
-- **Cyclical recovery signals** (e.g., Industrials + Financials financial performance surging)
-- **Structural growth signals** (e.g., Communication Services competitive position)
-- **Risk/stress signals** (e.g., Consumer Discretionary regulatory concerns)
-- **Fatigue/reversal signals** (e.g., Information Technology surprise declining)
+| Parameter | Description | Valid Values |
+|-----------|-------------|--------------|
+| `P_INDEXNAME` | Financial index to filter | `Russell 3000 Index`, `S&P 500 Index` |
+| `P_DOCUMENTSECTIONNAME` | Document section | `Total`, `Presentation`, `Question`, `Answer` |
+| `P_IMPORTANCE` | Importance level | `high`, `medium`, `low` |
 
-### Step 3: Research the "Why"
-For each top mover, search the web for:
-- `"{sector} sector {year} Q{quarter} earnings outlook {theme}"`
-- `"{sector} {year} {relevant macro event: tariffs, rate cuts, AI spending, etc.}"`
-
-Look for reputable sources: Fidelity, BlackRock, Goldman Sachs, Reuters, S&P Global, Deloitte, Morningstar, Schwab, FactSet.
-
-### Step 4: Pull Time Series
-For each interesting sector/theme combination, call `GET_AVG_NET_POSITIVITY` with matching parameters.
-
-Use the same `p_indexname`, `p_documentsectionname`, and `p_importance` as Step 1, plus the specific `p_sector` and `p_eventcategoryname` from the anomaly.
-
-### Step 5: Visualize
-Create a **line chart with points** for each sector showing the quarterly time series. Use:
-- Ordinal x-axis (CALENDARYEARQUARTER)
-- Quantitative y-axis (AVG_NET_POSITIVITY_SCORE)
-- Set y-axis domain appropriately for each sector's score range
-- Title format: `"{Sector} — {EventCategory readable name} (Net Positivity)"`
-
-### Step 6: Narrate Inflection Points
-For each chart, identify 4-6 major inflection points and explain:
-- **What happened** (the score movement)
-- **When** (the quarter)
-- **Why** (macro/sector event driving the shift)
-
-Common inflection drivers to check:
-- COVID-19 (2020-Q2)
-- Post-COVID recovery (2021)
-- Fed rate hike cycle (2022-Q2 to 2023)
-- AI emergence / ChatGPT (2023-Q1)
-- Rate stabilization (2024)
-- Tariff regime / Policy shifts (2025-2026)
-- AI capex boom/fatigue (2025-2026)
-
-### Step 7: Summarize for Portfolio Action
-Create a summary table with:
-| Signal | Implication | Positioning |
-
----
-
-## Output Format
-
-Structure the final output as:
-
-1. **Summary Table** — Top movers with Z-scores, direction indicators (🔺/🔻)
-2. **Analyst Commentary** — One section per sector with:
-   - What's driving this (1-2 sentences)
-   - Why it makes sense (research-backed, 1 paragraph)
-   - Time series chart
-   - Inflection point analysis (bulleted timeline)
-3. **Portfolio Takeaways** — Actionable table
-
----
-
-## Tips & Best Practices
-
-- **Start broad, then drill down:** Use `Total` document section first; if you need granularity, try `Presentation` (management's prepared remarks) vs. `Question` (analyst questions) vs. `Answer` (management's Q&A responses) to see where sentiment diverges.
-- **High importance first:** Start with `high` importance to focus on material themes. Use `medium` for broader coverage.
-- **Cross-validate upticks vs. downticks:** If one sector is surging in "Forecast_FinancialPerformance" but declining in "Surprise_StrategicInitiatives," that tells a nuanced story (strong results but fading innovation narrative).
-- **Compare indices:** Run the same analysis for S&P 500 vs. Russell 3000 to see if small-cap sentiment diverges from large-cap.
-- **Track quarter-over-quarter:** The TRAILING_4QTR_ZSCORE helps distinguish one-off spikes from sustained trends.
-- **Z > 2 is notable; Z > 3 is headline-worthy; Z > 4 is rare and demands explanation.**
-
----
-
-## Example Invocations
-
-**Find all anomalies:**
-
+**Example Call:**
+```
 GET_SENTIMENT_MOVERS(
-    p_indexname = 'Russell 3000 Index',
-    p_documentsectionname = 'Total',
-    p_importance = 'high'
+  P_INDEXNAME => 'Russell 3000 Index',
+  P_DOCUMENTSECTIONNAME => 'Total',
+  P_IMPORTANCE => 'high'
 )
+```
 
-**Get time series for a specific finding:**
+**Output Columns:**
+- `SECTOR` — Market sector
+- `EVENTCATEGORYNAME` — Event theme (e.g., `CurrentState_FinancialPerformance`, `Forecast_MarketAndCompetitivePosition`)
+- `LATEST_QUARTER` — Most recent quarter (e.g., `2026-2`)
+- `LATEST_QTR_AVG_SCORE` — Average net positivity in latest quarter
+- `TRAILING_4QTR_AVG_SCORE` — Trailing 4-quarter average
+- `HISTORICAL_AVG_SCORE` — Long-run historical mean
+- `HISTORICAL_STDDEV` — Historical standard deviation
+- `LATEST_QTR_CHANGE` — Absolute change from historical mean
+- `LATEST_QTR_ZSCORE` — Z-score for latest quarter vs. history
+- `TRAILING_4QTR_ZSCORE` — Z-score for trailing 4Q vs. history
+- `MAX_ABS_ZSCORE` — Maximum absolute Z-score (used for ranking)
 
+**Interpretation Rules:**
+- **|Z| > 3.0** → Highly anomalous, almost certainly a material shift — MUST investigate
+- **|Z| > 2.0** → Statistically significant — should investigate
+- **|Z| > 1.5** → Notable but may be noise
+- **Positive Z-score** → Sentiment UPTICK (more positive than historical norm)
+- **Negative Z-score** → Sentiment DOWNTICK (more negative than historical norm)
+
+**Selection Criteria for Deep Dive:**
+Select the top 3–5 sector × event combinations based on:
+1. Highest `MAX_ABS_ZSCORE` (statistical significance)
+2. Diversity of sectors (don't pick 5 from the same sector)
+3. Mix of upticks AND downticks for contrasting narratives
+4. Relevance to current market themes
+
+---
+
+### Step 2: Equity Analyst Interpretation + Web Research
+
+**Tool:** `Web_Search`
+
+**Purpose:** Build a macro narrative explaining WHY each selected sector is showing anomalous sentiment. Act as an equity analyst providing context.
+
+**Search Strategy:**
+For each selected sector × event combination, search for:
+- `"[sector] sector Q[quarter] [year] earnings [event theme keywords]"`
+- `"[sector] [year] [relevant macro driver: tariffs/AI/reshoring/etc.]"`
+
+**Analyst Framework:**
+For each anomalous signal, provide:
+1. **Thesis** — One-sentence summary of the narrative
+2. **Key Catalysts** — 2-3 specific drivers (with data points from web sources)
+3. **Supporting Evidence** — Analyst reports, macro data (PMI, spending figures, etc.)
+4. **Implications** — What this means for sector positioning
+
+---
+
+### Step 3: Generate Time-Series Sentiment Data
+
+**Tool:** `GET_AVG_NET_POSITIVITY`
+
+**Purpose:** Retrieve the full quarterly time-series for each selected sector × event combination to visualize trends and identify inflection points.
+
+**Parameters:**
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `P_INDEXNAME` | Index name | `Russell 3000 Index` |
+| `P_SECTOR` | Sector name (exact match) | `Industrials`, `Information Technology` |
+| `P_EVENTCATEGORYNAME` | Event category (exact match) | `CurrentState_FinancialPerformance` |
+| `P_DOCUMENTSECTIONNAME` | Section name | `Total` |
+| `P_IMPORTANCE` | Importance level | `high` |
+
+**Example Call:**
+```
 GET_AVG_NET_POSITIVITY(
-    p_indexname = 'Russell 3000 Index',
-    p_sector = 'Industrials',
-    p_eventcategoryname = 'CurrentState_FinancialPerformance',
-    p_documentsectionname = 'Total',
-    p_importance = 'high'
+  P_INDEXNAME => 'Russell 3000 Index',
+  P_SECTOR => 'Industrials',
+  P_EVENTCATEGORYNAME => 'CurrentState_FinancialPerformance',
+  P_DOCUMENTSECTIONNAME => 'Total',
+  P_IMPORTANCE => 'high'
 )
+```
 
-**Analyst-focused Q&A section only:**
+**Output Columns:**
+- `CALENDARYEARQUARTER` — Quarter label (e.g., `2020-1`, `2026-2`)
+- `AVG_NET_POSITIVITY_SCORE` — Average net positivity score for that quarter
 
-GET_SENTIMENT_MOVERS(
-p_indexname = 'Russell 3000 Index',
-p_documentsectionname = 'Answer',
-p_importance = 'high'
-)
+**IMPORTANT:** Call this function ONCE per selected sector × event combination. Make all calls in parallel (no dependencies between them).
+
+---
+
+### Step 4: Create Visualizations
+
+**Tool:** `data_to_chart` (Vega-Lite)
+
+**Purpose:** Create one line chart per sector showing the time-series evolution of sentiment.
+
+**Chart Specification Template:**
+```json
+{
+  "title": "[Sector]: [Event Category Human-Readable Name] (R3K, High Importance)",
+  "mark": {"type": "line", "point": true, "strokeWidth": 2},
+  "encoding": {
+    "x": {
+      "field": "CALENDARYEARQUARTER",
+      "type": "ordinal",
+      "title": "Quarter",
+      "axis": {"labelAngle": -45}
+    },
+    "y": {
+      "field": "AVG_NET_POSITIVITY_SCORE",
+      "type": "quantitative",
+      "title": "Avg Net Positivity Score",
+      "scale": {"zero": true}
+    }
+  }
+}
+```
+
+**Inflection Point Analysis:**
+After generating each chart, identify and explain:
+- Major peaks and troughs
+- Trend reversals (inflection points)
+- The current trajectory relative to history
+- Link each inflection to a known macro event (COVID, rate hikes, AI boom, tariffs, etc.)
+
+---
+
+### Step 5: Extract Earnings Call Evidence
+
+**Tool:** `pronto_mcp_search`
+
+**Purpose:** Find specific management quotes from earnings calls that explain the sentiment shift.
+
+**Search Strategy per Sector:**
+
+| For Uptick Sectors | For Downtick Sectors |
+|-------------------|---------------------|
+| `sentiment: "positive"` | `sentiment: "negative"` |
+| Search for growth/strength keywords | Search for risk/uncertainty keywords |
+
+**Parameters Template:**
+```json
+{
+  "sections": ["EarningsCalls_PresenterSpeech"],
+  "sectors": ["[target sector]"],
+  "sentiment": "[positive or negative based on Z-score direction]",
+  "sinceDay": "[start of the anomalous quarter, e.g., 2026-01-01]",
+  "untilDay": "[today's date]",
+  "size": 10,
+  "topicSearchQuery": "[natural language description of the theme]"
+}
+```
+
+**Topic Search Query Examples by Event Category:**
+| Event Category | Positive Search Query | Negative Search Query |
+|---------------|----------------------|----------------------|
+| `CurrentState_FinancialPerformance` | `record revenue strong financial results growth accelerating` | `revenue decline earnings miss weak demand` |
+| `Forecast_MarketAndCompetitivePosition` | `market leadership competitive advantage growing market share` | `competitive pressure market share loss disruption` |
+| `StrategicPosition_RegulatoryAndLegalIssues` | `regulatory clarity favorable policy compliance` | `tariffs regulatory uncertainty legal challenges trade policy` |
+| `Forecast_FinancialPerformance` | `strong outlook raised guidance revenue growth acceleration` | `lowered guidance cautious outlook headwinds` |
+| `CurrentState_OperationalPerformance` | `operational efficiency productivity improvement margin expansion` | `supply chain disruption operational challenges cost pressure` |
+
+**Output Format:**
+Present 2-3 direct quotes per sector with:
+- Speaker role (CEO, CFO)
+- Company name
+- Date
+- The actual quote text
+
+---
+
+## Valid Parameter Values Reference
+
+### Index Names
+- `Russell 3000 Index`
+- `S&P 500 Index`
+
+### Sectors (exact match required)
+```
+Communication Services
+Consumer Discretionary
+Consumer Staples
+Energy
+Financials
+Health Care
+Industrials
+Information Technology
+Materials
+Real Estate
+Utilities
+```
+
+### Event Category Names (common ones)
+```
+CurrentState_FinancialPerformance
+CurrentState_OperationalPerformance
+CurrentState_MarketAndCompetitivePosition
+CurrentState_StrategicInitiatives
+CurrentState_RegulatoryAndLegalIssues
+CurrentState_ESG
+CurrentState_MacroeconomicFactors
+CurrentState_CapitalAllocation
+Forecast_FinancialPerformance
+Forecast_OperationalPerformance
+Forecast_MarketAndCompetitivePosition
+Forecast_RegulatoryAndLegalIssues
+Forecast_MacroeconomicFactors
+Forecast_CapitalAllocation
+Forecast_ESG
+StrategicPosition_OperationalPerformance
+StrategicPosition_RegulatoryAndLegalIssues
+StrategicPosition_MacroeconomicFactors
+StrategicPosition_StrategicInitiatives
+StrategicPosition_CapitalAllocation
+StrategicPosition_ESG
+Surprise_FinancialPerformance
+Surprise_OperationalPerformance
+Surprise_MarketAndCompetitivePosition
+Surprise_StrategicInitiatives
+Surprise_RegulatoryAndLegalIssues
+Surprise_ESG
+Surprise_MacroeconomicFactors
+```
+
+### Document Section Names
+- `Total` — All sections combined
+- `Presentation` — Management presentation only
+- `Question` — Analyst questions only
+- `Answer` — Management answers to questions only
+
+### Importance Levels
+- `high`
+- `medium`
+- `low`
+
+---
+
+## Output Structure
+
+The final output should follow this structure:
+
+1. **Summary Table** — Top 5-10 anomalous signals ranked by |Z-score|
+2. **Analyst Interpretation** — For each selected signal:
+   - Thesis statement
+   - Key catalysts (2-3 bullets with data)
+   - Market implications
+3. **Time-Series Charts** — One line chart per selected sector (4-5 charts typical)
+   - Include inflection point annotations in the written analysis
+4. **Earnings Call Evidence** — 2-3 direct quotes per sector from management
+5. **Summary/Positioning Table** — Final table with signal direction and key driver per sector
+
+---
+
+## Error Handling
+
+- If `GET_SENTIMENT_MOVERS` returns no results → Check parameter spelling (exact match required)
+- If `GET_AVG_NET_POSITIVITY` returns empty → Verify sector name and event category are exact matches from Step 1 results
+- If Pronto MCP search returns few results → Broaden the date range or simplify the topicSearchQuery
+- All five filter parameters are required and applied as exact-match conditions — NULL or incorrect strings yield empty result sets
+
+---
+
+## Example Invocation Prompt
+
+> "Use the GET_SENTIMENT_MOVERS function to find unusual sentiment shifts in the Russell 3000 Index, Total section, high importance. Then analyze the top movers as an equity analyst, generate time-series charts using GET_AVG_NET_POSITIVITY, and extract supporting earnings call quotes."
+
+---
+
+## Notes
+
+- The functions require at least 4 historical quarters of data to compute valid Z-scores
+- "Noisy" categories (Other, Fluff, generic labels) are automatically excluded by GET_SENTIMENT_MOVERS
+- Results are ranked by `MAX_ABS_ZSCORE` descending — most anomalous at top
+- Net positivity scores range from -1 to +1 (negative = more negative sentiment, positive = more positive)
+- Quarter format is `YYYY-Q` (e.g., `2026-2` = Q2 2026)
