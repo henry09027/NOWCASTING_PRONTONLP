@@ -311,3 +311,4 @@ The final output should follow this structure:
 - Results are ranked by `MAX_ABS_ZSCORE` descending — most anomalous at top
 - Net positivity scores range from -1 to +1 (negative = more negative sentiment, positive = more positive)
 - Quarter format is `YYYY-Q` (e.g., `2026-2` = Q2 2026)
+- You must include all the verification links back to the earnings call using Pronto MCP
